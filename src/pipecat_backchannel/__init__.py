@@ -2,8 +2,8 @@
 
 Injects natural continuers ("mhm", "yeah", "right") while the user is still
 talking, so the agent sounds like it's listening instead of waiting. Clips are
-recorded once from your own TTS service and played from disk, so saying "mhm"
-costs no LLM call and no network round trip.
+recorded once from your own TTS service and played from disk. Pause mode uses
+local audio analysis; transcript mode asks an injected classifier at punctuation.
 
 Basic usage — no keys, no sample rates, no wiring::
 
@@ -38,12 +38,14 @@ one import deeper:
 ===================================  ========================================
 """
 
+from pipecat_backchannel.candidates import BackchannelCandidate
 from pipecat_backchannel.plugin import Backchannel
 from pipecat_backchannel.processor import BackchannelParams
 
-__version__ = "0.2.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "Backchannel",
+    "BackchannelCandidate",
     "BackchannelParams",
 ]

@@ -10,7 +10,7 @@
 [![PyPI](https://img.shields.io/pypi/v/pipecat-backchannel?cacheSeconds=3600)](https://pypi.org/project/pipecat-backchannel)
 [![Python](https://img.shields.io/pypi/pyversions/pipecat-backchannel?cacheSeconds=3600)](https://pypi.org/project/pipecat-backchannel)
 [![License](https://img.shields.io/badge/license-BSD--2--Clause-blue)](LICENSE)
-[![Pipecat](https://img.shields.io/badge/Pipecat-1.6.0-brightgreen)](https://github.com/pipecat-ai/pipecat)
+[![Pipecat](https://img.shields.io/badge/Pipecat-1.12.0-brightgreen)](https://github.com/pipecat-ai/pipecat)
 
 Your Pipecat agent listens back: quiet "mhm"s and "yeah"s while the user is
 still talking.
@@ -63,6 +63,103 @@ an API key, a voice ID, or a sample rate, and places every processor for you.
 The first run records the clips through **your own TTS**, so they come out in
 your bot's voice, and caches them in `.clip_cache/`. Every later run starts
 from the cache. Delete that directory after changing voice.
+
+## Transcript mode
+
+Use interim-transcript punctuation and a Pipecat classifier to decide both
+whether to backchannel and which clip to play. Requires Pipecat 1.12.0 or newer
+and an STT service producing cumulative interim transcripts with punctuation.
+This mode creates no backchannel VAD, Smart Turn analyzer, or heuristic selector.
+The default `mode="pause"` keeps the existing audio-based behavior.
+This release raises the package's minimum Pipecat version from 1.6.0 to 1.12.0,
+including for pause mode. Existing pause-mode arguments and its 2.5-second
+default cooldown are preserved; NLTK is an explicit dependency for its selector.
+
+```python
+from pipecat.classifiers.llm.classifier import LLMClassifier
+from pipecat_backchannel import Backchannel
+
+# Shared configuration and clip cache, built once for a voice/output rate.
+backchannel = Backchannel(
+    mode="transcript",
+    candidates=["はい"],
+    cooldown_s=1.5,  # omit for the transcript-mode default of 5 seconds
+)
+
+# Inside the session: supply its own classifier and conversation context.
+# llm is an existing LLMService supporting run_inference().
+pipeline = Pipeline(backchannel(
+    [transport.input(), stt, user, llm, tts, transport.output(), assistant],
+    classifier=LLMClassifier(llm=llm),
+    context_provider=context.get_messages,
+))
+```
+
+String candidates get stable IDs derived from their text. The configured TTS
+records each unique utterance into the normal clip cache. Adding an utterance is
+just `candidates=["はい", "なるほど", "そうなんですね"]`. For explicit semantics or
+an application-owned ID, mix strings with detailed candidates:
+
+```python
+from pipecat_backchannel import BackchannelCandidate
+
+backchannel = Backchannel(
+    mode="transcript",
+    candidates=[
+        BackchannelCandidate(
+            text="はい",
+            description="短く受け止め、話の続きを促す",
+            id="backchannel_hai",
+        ),
+        "なるほど",
+    ],
+    skip_description="今は相手の話の続きを聞くのが自然",
+)
+```
+
+Only `text` is required. Candidate IDs and texts must be unique; `skip` is
+reserved. A silent `skip` choice is always added. Its description is optional
+and configurable; it has no audio and consumes no playback cooldown.
+
+The classifier receives a copied conversation snapshot, finalized segments of
+the current utterance, its latest interim and boundary position, the last 32
+played backchannels with their turn/position and monotonic start timestamps,
+and seconds since the last backchannel (`None` before the first). A synchronous
+`context_provider` can trim or redact messages before returning them.
+
+Timing controls:
+
+- `punctuation="、,。."`: a newly observed boundary triggers consideration. Repeated
+  interims and edits before an already consumed boundary do not retrigger it.
+  Multiple new boundaries in one update produce one consideration, at the latest.
+- `cooldown_s=5.0`: measured from the transport's `BotStartedSpeakingFrame`,
+  attributed to an admitted clip. Expiry waits for the next new boundary.
+- `min_classification_interval_s=0.5`: bounds API call frequency even for `skip`.
+- `classification_timeout_s=1.0`: total decision lifetime, including time spent
+  reaching the player. Timeout, provider failure and stale results produce silence.
+
+Classification runs outside the frame-processing path, one request at a time.
+New boundaries arriving during inference are consumed and make the old result
+stale; the next boundary can trigger another request. Plain continuation after
+an unchanged boundary remains eligible. Final frames commit the STT segment and
+invalidate pending results; they do not trigger classification themselves.
+User-turn completion, real replies, and `enabled=False` prevent playback.
+
+The player rechecks each queued decision before emitting audio. Clip requests
+that never reach playback do not enter history. Transport feedback has no clip
+ID, so attribution uses a bounded reservation of an admitted clip while the
+output is idle, cleared on interruption. These timestamps describe server-side
+playback notification, not when a remote listener physically hears the sound.
+Speaking feedback attributed to a clip carries `frame.metadata["backchannel"] =
+True` upstream, for custom turn strategies that distinguish acknowledgments from
+real bot replies. The audio continues to use `append_to_context=False`.
+
+Each pipeline owns its classifier's setup/cleanup; construct a fresh classifier
+per session. An injected LLM service keeps its existing application/pipeline
+lifecycle. `LLMClassifier` uses the provider extras already installed for that
+LLM; `JevClassifier` additionally needs Pipecat's `jev` extra and its credentials.
+Japanese accuracy and timing depend on the STT punctuation and classifier backend;
+measure them on real conversations before choosing a model or a tighter timeout.
 
 ## Record before the first call
 
@@ -172,14 +269,14 @@ get a real reply.
 
 ## Limitations
 
-- **Pauses only.** Humans backchannel during speech too, cued by pitch. This
-  library reacts to pauses. The roadmap covers the rest.
-- **About 2× inference while the user speaks.** It runs a second VAD and
+- **Pause-mode timing.** The audio-based mode reacts to pauses. Transcript mode
+  can react during speech, but depends on interim punctuation and classifier latency.
+- **About 2× audio inference in pause mode.** It runs a second VAD and
   turn-detector on purpose: the pipeline's copies are tuned for turn-taking,
   and pause timing needs the opposite settings. A handful of concurrent
   sessions runs fine; measure before a large deployment.
-- **English only.** The clips and the regexes are English. The underlying
-  models handle other languages.
+- **English defaults in pause mode.** The default clips and selector regexes are
+  English. Transcript mode accepts caller-defined utterances and descriptions.
 
 ## Roadmap
 

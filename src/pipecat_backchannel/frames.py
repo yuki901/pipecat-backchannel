@@ -12,6 +12,8 @@ class PlayCachedClipFrame(DataFrame):
 
     Parameters:
         text: The clip text, used as the key into the loaded clip dict.
+        request_id: Optional transcript decision ID, revalidated by the player.
     """
 
     text: str
+    request_id: str | None = None

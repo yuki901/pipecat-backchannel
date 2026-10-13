@@ -1,6 +1,6 @@
 [project]
 name = "pipecat-backchannel"
-version = "0.3.3"
+version = "0.4.0"
 description = "Make voice AI conversations feel live — Pipecat agents that listen back with natural \"mhm\"s and \"yeah\"s while the user is still talking."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,11 +23,10 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 
-# Everything this package needs is already an unconditional pipecat-ai
-# dependency: onnxruntime/soxr/numpy (Silero VAD + LocalSmartTurnAnalyzerV3),
-# aiohttp (the Cartesia clip synthesizer), and nltk (optional synonym
-# expansion). No extras, no provider SDKs.
-dependencies = ["pipecat-ai>=1.6.0,<2"]
+# Classifier interfaces and audio analysis are supplied by Pipecat. NLTK
+# preserves the pause selector's synonym expansion after Pipecat 1.12 removed it.
+# Provider-specific classifier extras are selected by the integrating application.
+dependencies = ["pipecat-ai>=1.12.0,<2", "nltk>=3.9,<4"]
 
 [project.urls]
 Homepage = "https://github.com/maisterr/pipecat-backchannel"

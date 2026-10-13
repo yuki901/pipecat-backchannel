@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import array
+from typing import Protocol
 
 from loguru import logger
 from pipecat.frames.frames import (
@@ -18,6 +19,14 @@ from pipecat_backchannel.frames import PlayCachedClipFrame
 from pipecat_backchannel.library import ClipLibrary
 
 
+class PlaybackGate(Protocol):
+    """Session callbacks for checking and observing asynchronous decisions."""
+
+    def allow_play(self, request_id: str) -> bool: ...
+    def on_clip_emitted(self, request_id: str): ...
+    def observe_output(self, frame: Frame, direction: FrameDirection): ...
+
+
 class ClipPlayer(FrameProcessor):
     """Turns :class:`~pipecat_backchannel.frames.PlayCachedClipFrame` markers
     into audio.
@@ -30,7 +39,14 @@ class ClipPlayer(FrameProcessor):
     identically for a backchannel and for a real reply.
     """
 
-    def __init__(self, *, clips: ClipLibrary | None = None, volume: float = 0.6, **kwargs):
+    def __init__(
+        self,
+        *,
+        clips: ClipLibrary | None = None,
+        volume: float = 0.6,
+        playback_gate: PlaybackGate | None = None,
+        **kwargs,
+    ):
         """Initialize the player.
 
         Args:
@@ -47,21 +63,29 @@ class ClipPlayer(FrameProcessor):
         super().__init__(**kwargs)
         self._clips = clips or ClipLibrary()
         self._volume = volume
+        self._playback_gate = playback_gate
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Play cached clips; pass everything else through untouched."""
         await super().process_frame(frame, direction)
 
+        if self._playback_gate:
+            self._playback_gate.observe_output(frame, direction)
+
         if isinstance(frame, StartFrame):
             await self._clips.load(frame.audio_out_sample_rate)
 
         elif isinstance(frame, PlayCachedClipFrame):
-            await self._play(frame.text)
+            if frame.request_id is not None and (
+                self._playback_gate is None or not self._playback_gate.allow_play(frame.request_id)
+            ):
+                return
+            await self._play(frame.text, request_id=frame.request_id)
             return  # the marker itself must never leak downstream
 
         await self.push_frame(frame, direction)
 
-    async def _play(self, text: str):
+    async def _play(self, text: str, *, request_id: str | None = None):
         pcm = self._clips.get(text)
         if not pcm:
             # Silence here would be indistinguishable from the gate deciding not
@@ -71,6 +95,9 @@ class ClipPlayer(FrameProcessor):
                 "The clip inventory and the loaded clips are out of sync."
             )
             return
+
+        if request_id is not None and self._playback_gate:
+            self._playback_gate.on_clip_emitted(request_id)
 
         # append_to_context defaults to True, and the assistant aggregator opens
         # an assistant turn on any TTSStartedFrame carrying it. That would record

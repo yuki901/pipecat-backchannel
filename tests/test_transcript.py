@@ -395,3 +395,25 @@ async def test_removed_punctuation_invalidates_inflight_decision():
         assert not _fired(sink)
     finally:
         await close(gate, sink)
+
+
+def test_boundary_count_preserves_maximum_across_replacement_and_resets():
+    tracker = PunctuationTracker("、,。.")
+    assert tracker.update("昨日は、東京で。")[0] == 6
+    assert tracker.update("昨日は東京で")[0] is None
+    assert tracker.update("昨日は東京で、買い物。")[0] is None
+    assert tracker.update("昨日は東京で、買い物。そのあと、")[0] == 13
+    tracker.reset()
+    assert tracker.update("今日は、") == (3, False)
+
+
+def test_consecutive_punctuation_counts_as_one_boundary():
+    tracker = PunctuationTracker("、,。.")
+    assert tracker.update("説明、 。,") == (2, False)
+    assert tracker.update("説明。その続き、,。") == (6, False)
+
+
+def test_retroactive_punctuation_insertion_counts_as_new_opportunity():
+    tracker = PunctuationTracker("、,。.")
+    assert tracker.update("昨日は東京で、買い物")[0] == 6
+    assert tracker.update("昨日は、東京で、買い物") == (6, True)

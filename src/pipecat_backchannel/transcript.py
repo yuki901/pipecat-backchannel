@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import hashlib
 import math
 import time
 import uuid
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from difflib import SequenceMatcher
 from typing import Any
 
 from loguru import logger
@@ -43,24 +41,21 @@ DEFAULT_SKIP_DESCRIPTION = "Continue listening; a spoken acknowledgment would be
 
 
 class PunctuationTracker:
-    """Track consumed boundaries across cumulative interim revisions.
+    """Consider boundaries only when their count exceeds the segment maximum.
 
-    Punctuation participates in alignment as a common marker. The cursor sits
-    after a consumed marker, so inserting words before it moves the cursor with
-    the marker. Returned offsets count only content characters. Remembered
-    prefix hashes cover a boundary that disappears and later reappears.
+    Consecutive punctuation counts as one boundary. Revisions can move or remove
+    boundaries without lowering the maximum. Returned offsets count only content
+    characters; the previous normalized text is kept to detect stale decisions.
     """
 
     def __init__(self, punctuation: str):
         self.punctuation = frozenset(punctuation)
         self.text = ""
-        self.cursor = 0
-        self._seen: set[bytes] = set()
+        self.max_seen = 0
 
     def reset(self):
         self.text = ""
-        self.cursor = 0
-        self._seen.clear()
+        self.max_seen = 0
 
     def update(self, text: str) -> tuple[int | None, bool]:
         characters: list[str] = []
@@ -72,28 +67,14 @@ class PunctuationTracker:
                 characters.append(char)
         normalized = "".join(characters)
         revised = not normalized.startswith(self.text)
-        if revised and self.cursor:
-            for tag, i1, i2, j1, j2 in SequenceMatcher(
-                None, self.text, normalized, autojunk=False
-            ).get_opcodes():
-                if i1 < self.cursor <= i2:
-                    self.cursor = j1 + self.cursor - i1 if tag == "equal" else j2
-                    break
         self.text = normalized
-        offset = 0
-        newest = None
-        prefix = hashlib.sha256()
-        for position, char in enumerate(normalized, start=1):
-            prefix.update(char.encode("utf-8"))
-            if char != "\0":
-                offset += 1
-                continue
-            key = prefix.digest()
-            if position > self.cursor:
-                if key not in self._seen:
-                    newest = offset
-                self.cursor = position
-            self._seen.add(key)
+        count = normalized.count("\0")
+        newest = (
+            len(normalized[: normalized.rfind("\0")].replace("\0", ""))
+            if count > self.max_seen
+            else None
+        )
+        self.max_seen = max(self.max_seen, count)
         return newest, revised
 
 

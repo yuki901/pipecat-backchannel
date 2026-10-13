@@ -129,9 +129,14 @@ and seconds since the last backchannel (`None` before the first). A synchronous
 
 Timing controls:
 
-- `punctuation="、,。."`: a newly observed boundary triggers consideration. Repeated
-  interims and edits before an already consumed boundary do not retrigger it.
-  Multiple new boundaries in one update produce one consideration, at the latest.
+- `punctuation="、,。."`: consideration occurs when the boundary count exceeds
+  the maximum seen in the current STT segment. Consecutive punctuation counts as
+  one boundary. Removing and restoring punctuation or editing words at the same
+  count does not retrigger consideration. Multiple additional boundaries produce
+  one consideration, at the latest. Counts advance even during cooldown or inference
+  and reset on a final transcript or a new user turn. This deliberately approximate
+  rule can count punctuation inserted into earlier text as a new opportunity, and
+  miss a moved boundary when the total count stays unchanged.
 - `cooldown_s=5.0`: measured from the transport's `BotStartedSpeakingFrame`,
   attributed to an admitted clip. Expiry waits for the next new boundary.
 - `min_classification_interval_s=0.5`: bounds API call frequency even for `skip`.

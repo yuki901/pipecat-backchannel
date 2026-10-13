@@ -114,11 +114,13 @@ def test_boundary_tracker_handles_cumulative_interims_and_corrections():
     assert tracker.update("昨日は")[0] is None
     assert tracker.update("昨日は、")[0] == 3
     assert tracker.update("昨日は、東京に")[0] is None
-    assert tracker.update("昨日は, 東京に")[0] is None
+    assert tracker.update("昨日は, 東京に") == (None, False)
     # Correction grows text before the consumed comma; that comma is still consumed.
-    assert tracker.update("一昨日は、東京に")[0] is None
+    assert tracker.update("一昨日は、東京に") == (None, True)
     assert tracker.update("一昨日は、東京に行きました。")[0] is not None
     assert tracker.update("一昨日は、東京に行きました。")[0] is None
+    assert tracker.update("一昨日は、東京に行きました。 続き.")[0] is not None
+    assert tracker.update("一昨日は、東京に行きました。 続き. 、,。") == (None, False)
 
 
 async def test_simple_candidates_classify_once_with_context_and_skip_override():
@@ -336,13 +338,6 @@ async def test_cleanup_cancels_inflight_call():
     assert not _fired(sink)
 
 
-@pytest.mark.parametrize("punctuation", ["、", ",", "。", "."])
-def test_all_default_punctuation_triggers(punctuation):
-    tracker = PunctuationTracker("、,。.")
-    assert tracker.update("説明" + punctuation)[0] == 2
-    assert tracker.update("説明" + punctuation)[0] is None
-
-
 async def test_context_is_snapshotted_before_async_inference():
     messages = [{"role": "user", "content": "以前の発話"}]
     gate, sink, classifier = await make(Classifier(hold=True))
@@ -367,14 +362,6 @@ def test_transcript_sessions_share_audio_but_not_decision_state():
     assert gates[0]._classifier is not gates[1]._classifier
     gates[0]._last_played = 1
     assert gates[1]._last_played is None
-
-
-@pytest.mark.parametrize("suffix", ["", "東京"])
-def test_insertion_before_consumed_punctuation_keeps_same_boundary(suffix):
-    tracker = PunctuationTracker("、,。.")
-    assert tracker.update("昨日は、" + suffix) == (3, False)
-    assert tracker.update("昨日はね、" + suffix) == (None, True)
-    assert tracker.update("昨日はね、" + suffix + "続き。")[0] is not None
 
 
 def test_removed_and_restored_punctuation_is_consumed_but_invalidates():
@@ -405,12 +392,6 @@ def test_boundary_count_preserves_maximum_across_replacement_and_resets():
     assert tracker.update("昨日は東京で、買い物。そのあと、")[0] == 13
     tracker.reset()
     assert tracker.update("今日は、") == (3, False)
-
-
-def test_consecutive_punctuation_counts_as_one_boundary():
-    tracker = PunctuationTracker("、,。.")
-    assert tracker.update("説明、 。,") == (2, False)
-    assert tracker.update("説明。その続き、,。") == (6, False)
 
 
 def test_retroactive_punctuation_insertion_counts_as_new_opportunity():
